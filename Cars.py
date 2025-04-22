@@ -1,14 +1,14 @@
-import threading
+
+import multiprocessing
 import time
 import random
 
-
 # ==== CONFIGURATION ====
-N = 15  #streets
-GROUP_SIZE = 3  
-RUN_TIME = 40 
+N = 6  # Number of streets
+GROUP_SIZE = 2
+RUN_TIME = 30  # Seconds
 
-#GENERATE CONFLICT GROUPS 
+# ==== Generate conflict-free groups ====
 def generate_conflict_groups(n, group_size):
     groups = []
     used = set()
@@ -24,88 +24,88 @@ def generate_conflict_groups(n, group_size):
 
 conflict_groups = generate_conflict_groups(N, GROUP_SIZE)
 
-# TRAFFIC CONTROLLE
-class TrafficController:
-    def __init__(self, groups):
-        self.groups = groups
-        self.current_index = 0
-        self.lock = threading.Lock()
+# ==== Street Process ====
+def street_process(street_id, controller_pipe, car_queue, status_queue):
+    cars_waiting = random.randint(1, 5)
+    total_passed = 0
+    total_arrived = cars_waiting
+    empty_announced = False
 
-    def is_green(self, street_id):
-        return street_id in self.groups[self.current_index]
-
-    def next_group(self):
-        with self.lock:
-            self.current_index = (self.current_index + 1) % len(self.groups)
-
-# STREET THREAD
-class Street(threading.Thread):
-    def __init__(self, street_id, controller):
-        super().__init__()
-        self.street_id = street_id
-        self.controller = controller
-        self.cars_waiting = random.randint(1, 5)
-        self.running = True
-        self.lock = threading.Lock()
-        self.total_passed = 0
-        self.total_arrived = self.cars_waiting
-        self.empty_announced = False
-
-    def run(self):
-        while self.running:
-            if self.controller.is_green(self.street_id):
-                with self.lock:
-                    if self.cars_waiting == 0:
-                        if not self.empty_announced:
-                            print(f"Street {self.street_id} is empty.")
-                            self.empty_announced = True  
-                    else:
-                        cars_to_pass = min(2, self.cars_waiting)
-                        for _ in range(cars_to_pass):
-                            print(f"Street {self.street_id}: car passed!")
-                            self.cars_waiting -= 1
-                            self.total_passed += 1
-                            time.sleep(0.5)
-                        self.empty_announced = False  
+    while True:
+        msg = controller_pipe.recv()
+        if msg == "EXIT":
+            break
+        elif msg == "GO":
+            if cars_waiting == 0:
+                if not empty_announced:
+                    print(f"Street {street_id} is empty.")
+                    empty_announced = True
             else:
-                time.sleep(0.1)
+                cars_to_pass = min(2, cars_waiting)
+                for _ in range(cars_to_pass):
+                    print(f"Street {street_id}: car passed!")
+                    cars_waiting -= 1
+                    total_passed += 1
+                    time.sleep(0.5)
+                empty_announced = False
 
+        # Check for new car arrivals
+        while not car_queue.empty():
+            car_queue.get()
+            cars_waiting += 1
+            total_arrived += 1
+            print(f"Street {street_id}: car arrived. Waiting = {cars_waiting}")
 
-    def add_car(self):
-        with self.lock:
-            self.cars_waiting += 1
-            self.total_arrived += 1
-            print(f"Street {self.street_id}: car arrived. Waiting = {self.cars_waiting}")
+    status_queue.put((street_id, total_arrived, total_passed, cars_waiting))
 
-#SIMULATION SETUP
-controller = TrafficController(conflict_groups)
-streets = [Street(i, controller) for i in range(N)]
+# ==== Main Simulation ====
+def run_simulation():
+    processes = []
+    pipes = []
+    car_queues = []
+    status_queue = multiprocessing.Queue()
 
-for street in streets:
-    street.start()
+    # Setup all streets
+    for i in range(N):
+        parent_conn, child_conn = multiprocessing.Pipe()
+        car_queue = multiprocessing.Queue()
+        p = multiprocessing.Process(target=street_process, args=(i, child_conn, car_queue, status_queue))
+        processes.append(p)
+        pipes.append(parent_conn)
+        car_queues.append(car_queue)
+        p.start()
 
-# SIMULATION LOOP 
-start_time = time.time()
-try:
-    while time.time() - start_time < RUN_TIME:
-        current_group = conflict_groups[controller.current_index]
-        green_time = random.randint(3, 7)
-        print(f"\n== GREEN for group {current_group} for {green_time} seconds ==")
+    start_time = time.time()
+    try:
+        while time.time() - start_time < RUN_TIME:
+            current_index = int(((time.time() - start_time) // 5) % len(conflict_groups))
+            current_group = conflict_groups[current_index]
+            print(f"\n== GREEN for group {current_group} ==")
 
-        # Simulate random car arrivals
-        for _ in range(random.randint(1, N // 2)):
-            random.choice(streets).add_car()
+            # Send "GO" to streets in the group
+            for i in range(N):
+                if i in current_group:
+                    pipes[i].send("GO")
+                else:
+                    pipes[i].send("WAIT")
 
-        time.sleep(green_time)
-        controller.next_group()
+            # Random car arrivals
+            for _ in range(random.randint(1, N // 2)):
+                random.choice(car_queues).put("CAR")
 
-finally:
-    for s in streets:
-        s.running = False
-    for s in streets:
-        s.join()
+            time.sleep(5)
 
-#FINAL SUMMARY
-print("\nSimulation ended.\n== Summary ==")
-for s in streets:
-    print(f"Street {s.street_id}: Total Arrived = {s.total_arrived}, Passed = {s.total_passed}, Waiting = {s.cars_waiting}")
+    finally:
+        # Clean shutdown
+        for pipe in pipes:
+            pipe.send("EXIT")
+        for p in processes:
+            p.join()
+
+        print("\nSimulation ended.\n== Summary ==")
+        while not status_queue.empty():
+            sid, arrived, passed, waiting = status_queue.get()
+            print(f"Street {sid}: Total Arrived = {arrived}, Passed = {passed}, Waiting = {waiting}")
+
+if __name__ == "__main__":
+    run_simulation()
