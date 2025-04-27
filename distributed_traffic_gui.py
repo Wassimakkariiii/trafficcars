@@ -4,13 +4,13 @@ import random
 import time
 import threading
 
-# CONFIGURATION
+#CONFIG
 N = 12
 GROUP_SIZE = 3
 RUN_TIME = 60
 UPDATE_INTERVAL = 0.5
 
-# ==== Generate Conflict Groups ====
+#GenerateConflictGroups
 def generate_conflict_groups(n, group_size):
     groups = []
     used = set()
@@ -26,7 +26,7 @@ def generate_conflict_groups(n, group_size):
 
 conflict_groups = generate_conflict_groups(N, GROUP_SIZE)
 
-# ==== Street Process ====
+#StreetProcess
 def street_process(street_id, ctrl_pipe, data_queue):
     cars_waiting = random.randint(1, 5)
     allowed_to_pass = False
@@ -46,15 +46,15 @@ def street_process(street_id, ctrl_pipe, data_queue):
             cars_waiting -= cars_to_pass
             time.sleep(0.5)
 
-        # Random new car arrival (even if light is red)
+        # RandomNewCarArrival
         if random.random() < 0.3:
             cars_waiting += 1
 
-        # Send update to GUI
+      
         data_queue.put((street_id, cars_waiting))
         time.sleep(1)
 
-# ==== Traffic GUI ====
+
 class TrafficGUI:
     def __init__(self, root, num_streets, data_queue, control_pipes):
         self.root = root
@@ -100,7 +100,7 @@ class TrafficGUI:
         self.timer_label.config(text=f"Time Remaining: {self.remaining_time}s")
         self.root.after(int(UPDATE_INTERVAL * 1000), self.poll_data)
 
-# ==== Controller Logic (corrected) ====
+#ControllerLogicLoop
 def controller_loop(pipes, data_queue, gui):
     start_time = time.time()
     group_index = 0
@@ -109,26 +109,26 @@ def controller_loop(pipes, data_queue, gui):
         green_group = conflict_groups[group_index]
         gui.green_group = green_group
 
-        # Send control messages once per group switch
+        #Send control messages once per group switch message passing
         for i in range(N):
             if i in green_group:
                 pipes[i].send("GO")
             else:
                 pipes[i].send("WAIT")
 
-        # Countdown 5 seconds for the group
+        #5Seconds each groupp
         for t in range(5, 0, -1):
             gui.remaining_time = t
             time.sleep(1)
 
-        # Move to next group
+        #Move to next group
         group_index = (group_index + 1) % len(conflict_groups)
 
-    # End of simulation
+    #End
     for pipe in pipes:
         pipe.send("EXIT")
 
-# ==== Main Launcher ====
+#start
 def run_distributed_gui():
     data_queue = multiprocessing.Queue()
     pipes = []
