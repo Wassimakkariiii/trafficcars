@@ -1,17 +1,16 @@
-
 import tkinter as tk
 import multiprocessing
 import random
 import time
 import threading
 
-# ==== CONFIGURATION ====
-N = 6  # Number of streets
-GROUP_SIZE = 2
-RUN_TIME = 30  # Total run time in seconds
-UPDATE_INTERVAL = 0.5  # GUI polling interval
+# CONFIGURATION
+N = 12
+GROUP_SIZE = 3
+RUN_TIME = 60
+UPDATE_INTERVAL = 0.5
 
-# ==== Generate conflict-free groups ====
+# ==== Generate Conflict Groups ====
 def generate_conflict_groups(n, group_size):
     groups = []
     used = set()
@@ -30,6 +29,7 @@ conflict_groups = generate_conflict_groups(N, GROUP_SIZE)
 # ==== Street Process ====
 def street_process(street_id, ctrl_pipe, data_queue):
     cars_waiting = random.randint(1, 5)
+    allowed_to_pass = False
 
     while True:
         if ctrl_pipe.poll():
@@ -37,17 +37,24 @@ def street_process(street_id, ctrl_pipe, data_queue):
             if msg == "EXIT":
                 break
             elif msg == "GO":
-                cars_to_pass = min(2, cars_waiting)
-                cars_waiting -= cars_to_pass
-                time.sleep(0.5)
-        # Random car arrivals
+                allowed_to_pass = True
+            elif msg == "WAIT":
+                allowed_to_pass = False
+
+        if allowed_to_pass and cars_waiting > 0:
+            cars_to_pass = min(2, cars_waiting)
+            cars_waiting -= cars_to_pass
+            time.sleep(0.5)
+
+        # Random new car arrival (even if light is red)
         if random.random() < 0.3:
             cars_waiting += 1
-        # Send state to GUI
+
+        # Send update to GUI
         data_queue.put((street_id, cars_waiting))
         time.sleep(1)
 
-# ==== GUI ====
+# ==== Traffic GUI ====
 class TrafficGUI:
     def __init__(self, root, num_streets, data_queue, control_pipes):
         self.root = root
@@ -74,6 +81,7 @@ class TrafficGUI:
             light_label.pack(side='left')
             self.car_labels.append(car_label)
             self.street_labels.append(light_label)
+
         self.timer_label = tk.Label(self.root, text="Time Remaining: 0s", font=('Arial', 12, 'bold'))
         self.timer_label.grid(row=self.num_streets, column=0, pady=10)
 
@@ -82,31 +90,41 @@ class TrafficGUI:
             sid, cars = self.data_queue.get()
             self.car_counts[sid] = cars
             self.car_labels[sid].config(text=f"Cars: {cars}")
+
         for i in range(self.num_streets):
             if i in self.green_group:
                 self.street_labels[i].config(text="GREEN", bg='green')
             else:
                 self.street_labels[i].config(text="RED", bg='red')
+
         self.timer_label.config(text=f"Time Remaining: {self.remaining_time}s")
         self.root.after(int(UPDATE_INTERVAL * 1000), self.poll_data)
 
-# ==== Controller logic (runs in a thread) ====
+# ==== Controller Logic (corrected) ====
 def controller_loop(pipes, data_queue, gui):
     start_time = time.time()
     group_index = 0
+
     while time.time() - start_time < RUN_TIME:
         green_group = conflict_groups[group_index]
         gui.green_group = green_group
+
+        # Send control messages once per group switch
+        for i in range(N):
+            if i in green_group:
+                pipes[i].send("GO")
+            else:
+                pipes[i].send("WAIT")
+
+        # Countdown 5 seconds for the group
         for t in range(5, 0, -1):
             gui.remaining_time = t
-            for i in range(N):
-                if i in green_group:
-                    pipes[i].send("GO")
-                else:
-                    pipes[i].send("WAIT")
             time.sleep(1)
+
+        # Move to next group
         group_index = (group_index + 1) % len(conflict_groups)
 
+    # End of simulation
     for pipe in pipes:
         pipe.send("EXIT")
 
